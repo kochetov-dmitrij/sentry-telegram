@@ -1,18 +1,26 @@
 # coding: utf-8
 import logging
 from collections import defaultdict
+from urllib.error import HTTPError as UrllibHTTPError
+from requests.exceptions import HTTPError, SSLError
+from urllib.parse import urlparse
+from jinja2 import Environment
 
 from django import forms
 from django.utils.translation import gettext_lazy as _
 
+from sentry.exceptions import InvalidIdentity, PluginError
 from sentry.plugins.bases import notify
+from sentry.plugins.base.structs import Notification
+from sentry.shared_integrations.exceptions import ApiError
 from sentry.http import safe_urlopen
 from sentry.utils.safe import safe_execute
 
 from . import __version__, __doc__ as package_doc
+from .utils import escape_markdown, b64encode
 
 
-TELEGRAM_MAX_MESSAGE_LENGTH = 4096  # https://core.telegram.org/bots/api#sendmessage:~:text=be%20sent%2C%201%2D-,4096,-characters%20after%20entities
+TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 EVENT_TITLE_MAX_LENGTH = 500
 
 
@@ -36,9 +44,10 @@ class TelegramNotificationsOptionsForm(notify.NotificationConfigurationForm):
     message_template = forms.CharField(
         label=_('Message template'),
         widget=forms.Textarea(attrs={'class': 'span4'}),
-        help_text=_('Set in standard python\'s {}-format convention, available names are: '
-                    '{project_name}, {url}, {title}, {message}, {tag[%your_tag%]}'),
-        initial='*[Sentry]* {project_name} {tag[level]}: *{title}*\n```\n{message}```\n{url}'
+        help_text=_('Jinja2 format template. Available names are: '
+                    '{{project_name}}, {{url}}, {{title}}, {{message}}, {{tags.%your_tag%}}, {{rules}}. '
+                    'Available filters: escape_markdown, b64encode.'),
+        initial='*[Sentry]* {{ project_name }} {{ tags.level }}: *{{ title }}*\n```\n{{ message }}```\n{{ url }}'
     )
 
 
@@ -89,43 +98,44 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
             
         return config
 
-    def compile_message_text(self, message_template: str, message_params: dict, event_message: str) -> str:
-        """
-        Compiles message text from template and event message.
-        Truncates the original event message (`event.message`) to fit Telegram message length limit.
-        """
-        # TODO: add tests
-        truncate_warning_text = '... (truncated)'
-        truncate_warning_length = len(truncate_warning_text)
+    def compile_message_text(self, message_template: str, message_params: dict) -> str:
+        jinja_env = Environment()
+        jinja_env.filters['escape_markdown'] = escape_markdown
+        jinja_env.filters['b64encode'] = b64encode
 
-        truncated = False
-        while True:
-            message_text = message_template.format(**message_params, message=event_message)
-            message_text_size = len(message_text)
+        message_text = jinja_env.from_string(message_template).render(**message_params)
 
-            if truncated or message_text_size <= TELEGRAM_MAX_MESSAGE_LENGTH:
-                break
-            else:
-                truncate_size = (message_text_size - TELEGRAM_MAX_MESSAGE_LENGTH) + truncate_warning_length
-                event_message = event_message[:-truncate_size] + truncate_warning_text
-                truncated = True
+        if len(message_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            truncate_warning_text = '... (truncated)'
+            message_text = message_text[:TELEGRAM_MAX_MESSAGE_LENGTH-len(truncate_warning_text)] + truncate_warning_text
 
         return message_text
 
-    def build_message(self, group, event):
-        event_tags = defaultdict(lambda: '[NA]')
-        event_tags.update({k: v for k, v in event.tags})
+    def build_message(self, event, notification):
+        event_tags = defaultdict(lambda: '<nil>', {k: v for k, v in event.tags})
+
+        project_name = event.group.project.name
+        issue_url = event.group.get_absolute_url()
+        parsed_issue_url = urlparse(issue_url)
+
+        rules = [{
+            'label': rule.label,
+            'url': f'{parsed_issue_url.scheme}://{parsed_issue_url.netloc}/organizations/sentry/alerts/rules/{project_name}/{rule.id}/details/'
+        } for rule in notification.rules if rule.label]
 
         message_params = {
             'title': event.title[:EVENT_TITLE_MAX_LENGTH],
-            'tag': event_tags,
-            'project_name': group.project.name,
-            'url': group.get_absolute_url(),
+            'project_name': project_name,
+            'message': event.message,
+            'tags': event_tags,
+            'url': issue_url,
+            'rules': rules,
+            'event': event,
+            'notification': notification,
         }
         text = self.compile_message_text(
-            self.get_message_template(group.project),
+            self.get_message_template(event.group.project),
             message_params,
-            event.message,
         )
 
         return {
@@ -159,13 +169,40 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
         if response.status_code > 299:
             raise ConnectionError(response.content)
 
-    def notify_users(self, group, event, fail_silently=False, **kwargs):
+    def notify(self, notification: Notification, raise_exception: bool = False) -> None:
+        event = notification.event
+        try:
+            self.notify_users(
+                event=event,
+                notification=notification,
+            )
+        except (
+            ApiError,
+            HTTPError,
+            InvalidIdentity,
+            PluginError,
+            SSLError,
+            UrllibHTTPError,
+        ) as err:
+            self.logger.info(
+                "notification-plugin.notify-failed",
+                extra={
+                    "error": str(err),
+                    "plugin": self.slug,
+                    "project_id": event.group.project_id,
+                    "organization_id": event.group.project.organization_id,
+                },
+            )
+            if raise_exception:
+                raise
+
+    def notify_users(self, event, notification):
         self.logger.debug('Received notification for event: %s' % event)
-        receivers = self.get_receivers(group.project)
+        receivers = self.get_receivers(event.group.project)
         self.logger.debug('for receivers: %s' % ', '.join(['/'.join(item) for item in receivers] or ()))
-        payload = self.build_message(group, event)
+        payload = self.build_message(event, notification)
         self.logger.debug('Built payload: %s' % payload)
-        url = self.build_url(group.project)
+        url = self.build_url(event.group.project)
         self.logger.debug('Built url: %s' % url)
         for receiver in receivers:
             safe_execute(self.send_message, url, payload, receiver)
