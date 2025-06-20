@@ -65,45 +65,29 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
         return bool(self.get_option('api_token', project) and self.get_option('receivers', project))
 
     def get_config(self, project, **kwargs):
-        return [
-            {
-                'name': 'api_origin',
-                'label': 'Telegram API origin',
-                'type': 'text',
-                'placeholder': 'https://api.telegram.org',
+        form = self.project_conf_form()
+        config = []
+        
+        for field_name in ['api_origin', 'api_token', 'receivers', 'message_template']:
+            field = form.fields[field_name]
+            config_item = {
+                'name': field_name,
+                'label': field.label,
+                'type': 'textarea' if isinstance(field.widget, forms.Textarea) else 'text',
                 'validators': [],
-                'required': True,
-                'default': 'https://api.telegram.org'
-            },
-            {
-                'name': 'api_token',
-                'label': 'BotAPI token',
-                'type': 'text',
-                'help': 'Read more: https://core.telegram.org/bots/api#authorizing-your-bot',
-                'placeholder': '123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11',
-                'validators': [],
-                'required': True,
-            },
-            {
-                'name': 'receivers',
-                'label': 'Receivers',
-                'type': 'textarea',
-                'help': 'Enter receivers IDs (one per line). Personal messages, group chats and channels also available. '
-                        'If you want to specify a thread ID, separate it with "/" (e.g. "12345/12").',
-                'validators': [],
-                'required': True,
-            },
-            {
-                'name': 'message_template',
-                'label': 'Message Template',
-                'type': 'textarea',
-                'help': 'Set in standard python\'s {}-format convention, available names are: '
-                        '{project_name}, {url}, {title}, {message}, {tag[%your_tag%]}. Undefined tags will be shown as [NA]',
-                'validators': [],
-                'required': True,
-                'default': '*[Sentry]* {project_name} {tag[level]}: *{title}*\n```{message}```\n{url}'
-            },
-        ]
+                'required': field.required,
+            }
+            
+            if field.help_text:
+                config_item['help'] = field.help_text
+            if field.widget.attrs.get('placeholder'):
+                config_item['placeholder'] = field.widget.attrs['placeholder']
+            if hasattr(field, 'initial') and field.initial:
+                config_item['default'] = field.initial
+                
+            config.append(config_item)
+            
+        return config
 
     def compile_message_text(self, message_template: str, message_params: dict, event_message: str) -> str:
         """
