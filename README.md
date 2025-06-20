@@ -32,6 +32,7 @@ Table of compatibility:
 
 | Plugin version | Compatible Sentry versions | Tested in Sentry versions                           |
 |----------------|----------------------------|-----------------------------------------------------|
+| 0.7.0          | 24.5.1, 25.3.0             | 24.5.1, 24.6.x, 25.3.0                              |
 | 0.6.0          | 24.5.1, 24.6.x             | 24.5.1                                              |
 | 0.5.0          | 24.4.x to 24.5.0           | 24.4.1, 24.4.2, 24.5.0                              |
 | 0.4.0          | 8.x to 9.x                 | 8.9, 9.1.1                                          |
@@ -55,12 +56,12 @@ Table of compatibility:
    ```
 2. Open `sentry/enhance-image.sh` file in your favorite text editor and add the following line to the end of the file:
    ```bash
-   pip install sentry-telegram
+   pip install jinja2 sentry_telegram-0.7.0.tar.gz
    ```
    
    Or apply this command:
    ```bash
-    echo "pip install sentry-telegram" >> sentry/enhance-image.sh
+    echo "pip install jinja2 sentry_telegram-0.7.0.tar.gz" >> sentry/enhance-image.sh
     ```
    
    So, the file will look like:
@@ -75,9 +76,9 @@ Table of compatibility:
    pip install sentry-telegram
    ```
    
-   If you want to install a specific version of the plugin, you can specify it in the command (for example, version 0.6.0):
+   If you want to install a specific version of the plugin, you can specify it in the command (for example, version 0.7.0):
    ```bash
-   echo "pip install sentry-telegram==0.6.0" >> sentry/enhance-image.sh
+   echo "pip install jinja2 sentry_telegram-0.7.0.tar.gz" >> sentry/enhance-image.sh
    ```
 3. Run `./install.sh` script to build the Sentry image with the plugin installed:
    ```bash
