@@ -1,8 +1,6 @@
-# coding: utf-8
 import logging
 from collections import defaultdict
 from urllib.error import HTTPError as UrllibHTTPError
-from urllib.parse import urlparse
 
 from django import forms
 from django.utils.translation import gettext_lazy as _
@@ -13,14 +11,13 @@ from sentry.http import safe_urlopen
 from sentry.plugins.base.structs import Notification
 from sentry.plugins.bases import notify
 from sentry.shared_integrations.exceptions import ApiError
+from sentry.utils.http import absolute_uri
 from sentry.utils.safe import safe_execute
 
 from . import __doc__ as package_doc
 from . import __version__
-from .utils import b64encode, escape_markdown
-
-TELEGRAM_MAX_MESSAGE_LENGTH = 4096
-EVENT_TITLE_MAX_LENGTH = 500
+from .constants import TELEGRAM_MESSAGE_MAX_LENGTH
+from .utils import TextProcessor
 
 
 class TelegramNotificationsOptionsForm(notify.NotificationConfigurationForm):
@@ -54,7 +51,7 @@ class TelegramNotificationsOptionsForm(notify.NotificationConfigurationForm):
             "{{project_name}}, {{url}}, {{title}}, {{message}}, {{tags.%your_tag%}}, {{rules}}. "
             "Available filters: escape_markdown, b64encode."
         ),
-        initial="*[Sentry]* {{ project_name }} {{ tags.level }}: *{{ title }}*\n```\n{{ message }}```\n{{ url }}",
+        initial="*[Sentry]* {{ project_name }} {{ tags.level }}: *{{ title }}*\n```\n{{ message }}\n```\n{{ url }}",
     )
 
 
@@ -63,11 +60,11 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
     slug = "sentry_telegram"
     description = package_doc
     version = __version__
-    author = "Viacheslav Butorov"
-    author_url = "https://github.com/butorov/sentry-telegram"
+    author = "kochetov-dmitrij"
+    author_email = "d.kochetov98@gmail.com"
     resource_links = [
-        ("Bug Tracker", "https://github.com/butorov/sentry-telegram/issues"),
-        ("Source", "https://github.com/butorov/sentry-telegram"),
+        ("Source", "https://github.com/kochetov-dmitrij/sentry-telegram"),
+        ("Forked From", "https://github.com/butorov/sentry-telegram"),
     ]
 
     conf_key = "sentry_telegram"
@@ -97,33 +94,24 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
                 ),
                 "validators": [],
                 "required": field.required,
+                "placeholder": field.widget.attrs.get("placeholder"),
+                "default": field.initial,
+                "help": field.help_text,
             }
-
-            if field.help_text:
-                config_item["help"] = field.help_text
-            if field.widget.attrs.get("placeholder"):
-                config_item["placeholder"] = field.widget.attrs["placeholder"]
-            if hasattr(field, "initial") and field.initial:
-                config_item["default"] = field.initial
-
             config.append(config_item)
 
         return config
 
     def compile_message_text(self, message_template: str, message_params: dict) -> str:
         jinja_env = Environment()
-        jinja_env.filters["escape_markdown"] = escape_markdown
-        jinja_env.filters["b64encode"] = b64encode
+        jinja_env.filters["escape_markdown"] = TextProcessor.escape_markdown
+        jinja_env.filters["b64encode"] = TextProcessor.b64encode
+        jinja_env.filters["truncate"] = TextProcessor.truncate
 
         message_text = jinja_env.from_string(message_template).render(**message_params)
-
-        if len(message_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
-            truncate_warning_text = "... (truncated)"
-            message_text = (
-                message_text[: TELEGRAM_MAX_MESSAGE_LENGTH - len(truncate_warning_text)]
-                + truncate_warning_text
-            )
-
+        message_text = TextProcessor.truncate(
+            message_text, TELEGRAM_MESSAGE_MAX_LENGTH, "... (truncated)"
+        )
         return message_text
 
     def build_message(self, event, notification):
@@ -131,19 +119,19 @@ class TelegramNotificationsPlugin(notify.NotificationPlugin):
 
         project_name = event.group.project.name
         issue_url = event.group.get_absolute_url()
-        parsed_issue_url = urlparse(issue_url)
 
         rules = [
             {
                 "label": rule.label,
-                "url": f"{parsed_issue_url.scheme}://{parsed_issue_url.netloc}/organizations/sentry/alerts/rules/{project_name}/{rule.id}/details/",
+                "url": absolute_uri(
+                    f"/organizations/sentry/alerts/rules/{project_name}/{rule.id}/details/"
+                ),
             }
             for rule in notification.rules
-            if rule.label
         ]
 
         message_params = {
-            "title": event.title[:EVENT_TITLE_MAX_LENGTH],
+            "title": event.title,
             "project_name": project_name,
             "message": event.message,
             "tags": event_tags,

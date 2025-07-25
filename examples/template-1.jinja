@@ -6,19 +6,20 @@
     'info': '📋',
     'debug': '📋',
 } -%}
-{{ level_emoji[tags.level] }} Sentry Alert ({{ tags.level }})
+{{ level_emoji[tags.level] }} Sentry Alert ({{ tags.level }}) - [View issue]({{ url }})
 
 🧩 \[Project] *{{ project_name }}*
 🌍 \[Env] *{{ tags.environment }}*
-🔔 \[Issue] {{ title | escape_markdown }}
+{% if tags.server_name != '<nil>' -%}
+📝 \[Server] {{ tags.server_name | escape_markdown }}
+{% endif -%}
+🔔 \[Issue] {{ title | truncate(120) | escape_markdown }}
+{% if event.culprit -%}
+🎯 \[Culprit] {{ event.culprit | escape_markdown }}
+{% endif -%}
 {% if message -%}
-📝 \[Message] {{ message | escape_markdown }}
+📝 \[Message] {{ message | truncate(220) | escape_markdown }}
 {% endif -%}
-[View issue]({{ url }})
-
-{% if rules -%}
-📕 \[Triggered Rules]
 {% for rule in rules -%}
-> "{{ rule.label | escape_markdown }}" - [View rule]({{ rule.url }})
+📕 \[Triggered Rule] {{ rule.label | escape_markdown }} - [View rule]({{ rule.url }})
 {% endfor -%}
-{% endif -%}
