@@ -1,0 +1,25 @@
+{% set level_emoji = {
+    'fatal': '🚨',
+    'error': '🚨',
+    'warning': '⚠️',
+    'log': '📋',
+    'info': '📋',
+    'debug': '📋',
+} -%}
+{{ level_emoji[tags.level] }} Sentry Alert ({{ tags.level }}) - [View issue]({{ url }})
+
+🧩 \[Project] *{{ project_name }}*
+🌍 \[Env] *{{ tags.environment }}*
+{% if tags.server_name != '<nil>' -%}
+📝 \[Server] {{ tags.server_name | escape_markdown }}
+{% endif -%}
+🔔 \[Issue] {{ title | truncate(120) | escape_markdown }}
+{% if event.culprit -%}
+🎯 \[Culprit] {{ event.culprit | escape_markdown }}
+{% endif -%}
+{% if message -%}
+📝 \[Message] {{ message | truncate(220) | escape_markdown }}
+{% endif -%}
+{% for rule in rules -%}
+📕 \[Triggered Rule] {{ rule.label | escape_markdown }} - [View rule]({{ rule.url }})
+{% endfor -%}
